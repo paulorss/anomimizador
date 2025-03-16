@@ -5,7 +5,7 @@ import re
 import pandas as pd
 from PIL import Image
 from PyPDF2 import PdfReader
-import spacy
+#import spacy
 import regex as re
 from presidio_analyzer import AnalyzerEngine, RecognizerRegistry, PatternRecognizer, Pattern
 from presidio_anonymizer import AnonymizerEngine
