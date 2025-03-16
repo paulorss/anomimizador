@@ -4,3 +4,4 @@ pandas
 pillow
 regex
 presidio
+presidio-analyzer
