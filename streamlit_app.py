@@ -5,9 +5,9 @@ import re
 import pandas as pd
 from PIL import Image
 from PyPDF2 import PdfReader
-#import spacy
 import regex as re
-from presidio_analyzer import AnalyzerEngine, RecognizerRegistry, PatternRecognizer, Pattern
+from presidio_analyzer import AnalyzerEngine, RecognizerRegistry, PatternRecognizer, Pattern, EntityRecognizer
+from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
 from presidio_anonymizer.entities import OperatorConfig
 
@@ -19,7 +19,324 @@ st.set_page_config(
     initial_sidebar_state="auto",
 )
 
-# Função simples de anonimização que não depende do Presidio
+def create_pt_br_recognizers():
+    """
+    Cria reconhecedores personalizados para o português brasileiro
+    """
+    recognizers = []
+    
+    # CPF Recognizer
+    cpf_pattern = Pattern(
+        name="cpf_pattern",
+        regex=r'\d{3}\.?\d{3}\.?\d{3}-?\d{2}',
+        score=0.9
+    )
+    cpf_recognizer = PatternRecognizer(
+        supported_entity="CPF",
+        patterns=[cpf_pattern],
+        context=["cpf", "cadastro de pessoa física", "documento", "número"]
+    )
+    recognizers.append(cpf_recognizer)
+    
+    # CNPJ Recognizer
+    cnpj_pattern = Pattern(
+        name="cnpj_pattern",
+        regex=r'\d{2}\.?\d{3}\.?\d{3}/?\.?\d{4}-?\d{2}',
+        score=0.9
+    )
+    cnpj_recognizer = PatternRecognizer(
+        supported_entity="CNPJ",
+        patterns=[cnpj_pattern],
+        context=["cnpj", "cadastro nacional", "empresa", "pessoa jurídica"]
+    )
+    recognizers.append(cnpj_recognizer)
+    
+    # RG Recognizer
+    rg_pattern = Pattern(
+        name="rg_pattern",
+        regex=r'\d{1,2}\.?\d{3}\.?\d{3}-?[\dxX]',
+        score=0.7
+    )
+    rg_recognizer = PatternRecognizer(
+        supported_entity="RG", 
+        patterns=[rg_pattern],
+        context=["rg", "registro geral", "identidade", "documento"]
+    )
+    recognizers.append(rg_recognizer)
+    
+    # Telefone Brasileiro
+    telefone_pattern = Pattern(
+        name="telefone_pattern",
+        regex=r'(\(?\d{2}\)?)\s*(\d{4,5})-?(\d{4})|\(\d{2}\)\s*\d{4,5}-?\d{4}|(\d{2})\s*9?\d{4}-?\d{4}',
+        score=0.8
+    )
+    telefone_recognizer = PatternRecognizer(
+        supported_entity="TELEFONE",
+        patterns=[telefone_pattern],
+        context=["telefone", "celular", "contato", "ligar", "whatsapp"]
+    )
+    recognizers.append(telefone_recognizer)
+    
+    # CEP Brasileiro
+    cep_pattern = Pattern(
+        name="cep_pattern",
+        regex=r'\d{5}-?\d{3}',
+        score=0.8
+    )
+    cep_recognizer = PatternRecognizer(
+        supported_entity="CEP",
+        patterns=[cep_pattern],
+        context=["cep", "código postal", "endereço"]
+    )
+    recognizers.append(cep_recognizer)
+    
+    # Endereço
+    endereco_pattern = Pattern(
+        name="endereco_pattern",
+        regex=r'(rua|avenida|av\.|alameda|praça|travessa|rod\.|rodovia)\s+[A-Za-zÀ-ÿ\s\.\,0-9]+,?\s*(n°\.?|nº\.?|número\.?)?\s*\d*',
+        score=0.65
+    )
+    endereco_recognizer = PatternRecognizer(
+        supported_entity="ENDERECO",
+        patterns=[endereco_pattern],
+        context=["endereço", "localizado", "reside", "mora"]
+    )
+    recognizers.append(endereco_recognizer)
+    
+    # Cartão de Crédito
+    cartao_pattern = Pattern(
+        name="cartao_pattern",
+        regex=r'\d{4}[\s.-]?\d{4}[\s.-]?\d{4}[\s.-]?\d{4}',
+        score=0.9
+    )
+    cartao_recognizer = PatternRecognizer(
+        supported_entity="CARTAO_CREDITO",
+        patterns=[cartao_pattern],
+        context=["cartão", "crédito", "débito", "visa", "master"]
+    )
+    recognizers.append(cartao_recognizer)
+    
+    # Data de Nascimento
+    data_pattern = Pattern(
+        name="data_pattern",
+        regex=r'nascido\s+em\s+\d{2}[./]\d{2}[./]\d{4}|nascida\s+em\s+\d{2}[./]\d{2}[./]\d{4}|data\s+de\s+nascimento:?\s+\d{2}[./]\d{2}[./]\d{4}',
+        score=0.8
+    )
+    data_recognizer = PatternRecognizer(
+        supported_entity="DATA_NASCIMENTO",
+        patterns=[data_pattern],
+        context=["nascimento", "nascido", "nascida", "idade"]
+    )
+    recognizers.append(data_recognizer)
+    
+    # Filiação
+    filiacao_pattern = Pattern(
+        name="filiacao_pattern",
+        regex=r'filho\s+(de|da|do)\s+[A-Za-zÀ-ÿ\s]+(\s+e\s+de\s+[A-Za-zÀ-ÿ\s]+)?',
+        score=0.7
+    )
+    filiacao_recognizer = PatternRecognizer(
+        supported_entity="FILIACAO",
+        patterns=[filiacao_pattern],
+        context=["filho", "filha", "pai", "mãe", "genitores"]
+    )
+    recognizers.append(filiacao_recognizer)
+    
+    # Estado Civil
+    estado_civil_pattern = Pattern(
+        name="estado_civil_pattern",
+        regex=r'estado\s+civil\s*:?\s*(casado|solteiro|viúvo|divorciado|separado|união estável)',
+        score=0.7
+    )
+    estado_civil_recognizer = PatternRecognizer(
+        supported_entity="ESTADO_CIVIL",
+        patterns=[estado_civil_pattern],
+        context=["estado civil", "casado", "solteiro", "viúvo", "divorciado"]
+    )
+    recognizers.append(estado_civil_recognizer)
+    
+    # Idade
+    idade_pattern = Pattern(
+        name="idade_pattern",
+        regex=r'\b\d{1,3}\s+anos\b|\bidade\s+de\s+\d{1,3}\b',
+        score=0.6
+    )
+    idade_recognizer = PatternRecognizer(
+        supported_entity="IDADE",
+        patterns=[idade_pattern],
+        context=["idade", "anos", "aniversário"]
+    )
+    recognizers.append(idade_recognizer)
+    
+    # Profissão
+    profissao_pattern = Pattern(
+        name="profissao_pattern",
+        regex=r'profissão\s*:?\s*[A-Za-zÀ-ÿ\s]+',
+        score=0.6
+    )
+    profissao_recognizer = PatternRecognizer(
+        supported_entity="PROFISSAO",
+        patterns=[profissao_pattern],
+        context=["trabalha", "emprego", "ocupação", "cargo"]
+    )
+    recognizers.append(profissao_recognizer)
+    
+    return recognizers
+
+def create_custom_deny_list_recognizer(deny_list):
+    """
+    Cria um reconhecedor baseado em uma lista personalizada de palavras
+    """
+    if not deny_list or not any(deny_list):
+        return None
+        
+    patterns = []
+    for i, word in enumerate(deny_list):
+        if word and len(word) > 2:  # Ignora palavras muito curtas
+            word_pattern = Pattern(
+                name=f"custom_pattern_{i}",
+                regex=r'\b' + re.escape(word) + r'\b',
+                score=0.7
+            )
+            patterns.append(word_pattern)
+            
+    if patterns:
+        return PatternRecognizer(
+            supported_entity="CUSTOM",
+            patterns=patterns,
+            context=[]
+        )
+    return None
+
+def setup_analyzer_engine(deny_list=None):
+    """
+    Configura o motor de análise do Presidio com os reconhecedores personalizados
+    """
+    # Criar um registro de reconhecedores
+    registry = RecognizerRegistry(supported_languages=["pt"])
+    
+    # Configurar o provedor de NLP
+    nlp_engine = NlpEngineProvider(nlp_configuration={
+        "nlp_engine_name": "spacy",
+        "models": [{"lang_code": "pt", "model_name": "pt_core_news_md"}]
+    }).create_engine()
+    
+    # Adicionar os reconhecedores padrão da Presidio com suporte a PT
+    registry.load_predefined_recognizers(languages=["pt"])
+    
+    # Adicionar os reconhecedores personalizados
+    for recognizer in create_pt_br_recognizers():
+        registry.add_recognizer(recognizer)
+    
+    # Adicionar o reconhecedor personalizado de lista negada
+    if deny_list:
+        custom_deny_list_recognizer = create_custom_deny_list_recognizer(deny_list)
+        if custom_deny_list_recognizer:
+            registry.add_recognizer(custom_deny_list_recognizer)
+    
+    # Criar o motor de análise
+    analyzer = AnalyzerEngine(
+        registry=registry,
+        nlp_engine=nlp_engine,
+        supported_languages=["pt"]
+    )
+    
+    return analyzer
+
+def setup_anonymizer_engine():
+    """
+    Configura o motor de anonimização do Presidio
+    """
+    return AnonymizerEngine()
+
+def anonimizar_com_presidio(texto, deny_list=None, mascara='*'):
+    """
+    Anonimiza o texto usando o Presidio
+    """
+    if not texto:
+        return texto, []
+    
+    # Configurar o motor de análise
+    analyzer = setup_analyzer_engine(deny_list)
+    
+    # Configurar o motor de anonimização
+    anonymizer = setup_anonymizer_engine()
+    
+    # Analisar o texto
+    results = analyzer.analyze(
+        text=texto,
+        language="pt",
+        entities=None,  # Detectar todas as entidades suportadas
+        allow_list=None,
+        score_threshold=0.4  # Ajustar conforme necessário
+    )
+    
+    # Configurar operações de anonimização
+    operators = {
+        "DEFAULT": OperatorConfig("replace", {"new_value": mascara * 5}),
+        "PHONE_NUMBER": OperatorConfig("mask", {"masking_char": mascara, "chars_to_mask": 10, "from_end": False}),
+        "CREDIT_CARD": OperatorConfig("mask", {"masking_char": mascara, "chars_to_mask": 12, "from_end": True}),
+        "CUSTOM": OperatorConfig("replace", {"new_value": mascara * 7}),
+    }
+    
+    # Converter os resultados do Presidio para o formato esperado pelo código original
+    achados = []
+    for result in results:
+        achados.append({
+            'Tipo de Entidade': result.entity_type,
+            'Texto': texto[result.start:result.end],
+            'Início': result.start,
+            'Fim': result.end,
+            'Confiança': result.score
+        })
+    
+    # Anonimizar o texto se houver achados
+    if results:
+        try:
+            anonymized_result = anonymizer.anonymize(
+                text=texto,
+                analyzer_results=results,
+                operators=operators
+            )
+            texto_anonimizado = anonymized_result.text
+        except Exception as e:
+            st.error(f"Erro na anonimização: {str(e)}")
+            # Fallback para método mais simples se o anonymizer falhar
+            texto_anonimizado = texto
+            for result in results:
+                texto_anonimizado = texto_anonimizado.replace(
+                    texto[result.start:result.end],
+                    mascara * len(texto[result.start:result.end])
+                )
+    else:
+        texto_anonimizado = texto
+    
+    return texto_anonimizado, achados
+
+def anonimizar_hibrido(texto, palavras_adicionais=None, mascara='*', tolerancia=0.5):
+    """
+    Função híbrida que combina o Presidio com o método simples para melhor cobertura
+    """
+    if not texto:
+        return texto, []
+    
+    # Lista para armazenar palavras adicionais
+    deny_list = [p.strip() for p in palavras_adicionais.split(",")] if palavras_adicionais else []
+    
+    # Primeiro, usar Presidio para anonimização
+    texto_presidio, achados_presidio = anonimizar_com_presidio(texto, deny_list, mascara)
+    
+    # Se o Presidio não encontrou nada ou encontrou poucos dados, tentar o método simples como backup
+    if len(achados_presidio) < 3:  # Número arbitrário para decidir se vale a pena tentar o método simples
+        texto_simples, achados_simples = anonimizar_simples(texto, deny_list, mascara)
+        
+        # Comparar resultados e escolher o que encontrou mais achados
+        if len(achados_simples) > len(achados_presidio):
+            return texto_simples, achados_simples
+    
+    return texto_presidio, achados_presidio
+
+# Função anonimizar_simples mantida para backup
 def anonimizar_simples(texto, palavras_adicionais=None, mascara='*'):
     """
     Função de anonimização simples usando expressões regulares
@@ -54,8 +371,22 @@ def anonimizar_simples(texto, palavras_adicionais=None, mascara='*'):
         "sindicato", "filiação sindical", "sindicalizado",
         
         # Orientação sexual
-        "orientação sexual", "heterossexual", "homossexual", "bissexual", "gay", "casado", "solteiro", "víuva", "casada", "divorciado", 
+        "orientação sexual", "heterossexual", "homossexual", "bissexual", "gay", 
         "lésbica", "transgênero", "LGBTQIA+", "vida sexual", "práticas sexuais",
+        
+        # Estado civil
+        "casado", "solteiro", "viúvo", "viúva", "casada", "divorciado", "divorciada",
+        "separado", "separada", "união estável",
+        
+        # Profissão
+        "advogado", "médico", "médica", "engenheiro", "engenheira", "professor", "professora",
+        "contador", "contadora", "dentista", "enfermeiro", "enfermeira", "arquiteto", "arquiteta",
+        "policial", "motorista", "vendedor", "vendedora", "empresário", "empresária", "autônomo",
+        "autônoma", "desempregado", "desempregada", "aposentado", "aposentada", "estudante",
+        "estagiário", "estagiária", "funcionário público", "funcionária pública",
+        
+        # Filiação
+        "filho de", "filha de", "pai", "mãe", "filiação", "filho", "filha", "genitor", "genitora",
         
         # Saúde
         "saúde", "prontuário médico", "doença", "enfermidade", "diagnóstico", 
@@ -82,12 +413,21 @@ def anonimizar_simples(texto, palavras_adicionais=None, mascara='*'):
         'CPF': r'\d{3}\.?\d{3}\.?\d{3}-?\d{2}',
         'CNPJ': r'\d{2}\.?\d{3}\.?\d{3}/?\.?\d{4}-?\d{2}',
         'RG': r'\d{1,2}\.?\d{3}\.?\d{3}-?[\dxX]',
-        'TELEFONE': r'(\(?\d{2}\)?)\s*(\d{4,5})-?(\d{4})',
+        'TELEFONE': r'(\(?\d{2}\)?)\s*(\d{4,5})-?(\d{4})|\(\d{2}\)\s*\d{4,5}-?\d{4}|(\d{2})\s*9?\d{4}-?\d{4}',
         'CEP': r'\d{5}-?\d{3}',
-        'EMAIL': r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
+        'EMAIL': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b|[Ee]-?mail:?\s*[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}',
         'CARTAO_CREDITO': r'\d{4}[\s.-]?\d{4}[\s.-]?\d{4}[\s.-]?\d{4}',
-        'DATA': r'\d{2}/\d{2}/\d{4}',
+        'DATA': r'\d{2}[./]\d{2}[./]\d{4}|\d{2}-\d{2}-\d{4}',
         'NOME_EMPRESA': r'([A-Z][A-ZÀ-Ú]+\s+){2,}([A-Z][A-ZÀ-Ú\s]*)+', # Sequência de palavras em maiúsculas
+        'IDADE': r'\b\d{1,3}\s+anos\b|\bidade\s+de\s+\d{1,3}\b',
+        'DATA_NASCIMENTO': r'nascido\s+em\s+\d{2}[./]\d{2}[./]\d{4}|nascida\s+em\s+\d{2}[./]\d{2}[./]\d{4}|data\s+de\s+nascimento:?\s+\d{2}[./]\d{2}[./]\d{4}',
+        'ENDERECO': r'residente\s+(e\s+domiciliado\s+)?(a|à|na|no)?\s+.{5,50}(,\s+n°\.?\s+\d+)?|morador\s+(a|à|na|no)?\s+.{5,50}(,\s+n°\.?\s+\d+)?',
+        'ENDERECO_RUA': r'(rua|avenida|av\.|alameda|praça|travessa|rod\.|rodovia)\s+[A-Za-zÀ-ÿ\s\.\,0-9]+,?\s*(n°\.?|nº\.?|número\.?)?\s*\d*',
+        'ENDERECO_BAIRRO': r'(bairro|b\.)\s+[A-Za-zÀ-ÿ\s]+',
+        'ENDERECO_CIDADE': r'(cidade|cid\.|município) de\s+[A-Za-zÀ-ÿ\s]+|[Ee]m\s+[A-Z][a-zÀ-ÿ]+(/[A-Z]{2})?',
+        'ESTADO_CIVIL': r'estado\s+civil\s*:?\s*(casado|solteiro|viúvo|divorciado|separado|união estável)',
+        'PROFISSAO': r'profissão\s*:?\s*[A-Za-zÀ-ÿ\s]+',
+        'FILIACAO': r'filho\s+(de|da|do)\s+[A-Za-zÀ-ÿ\s]+(\s+e\s+de\s+[A-Za-zÀ-ÿ\s]+)?',
     }
     
     # Procurar e substituir os padrões
@@ -115,8 +455,27 @@ def anonimizar_simples(texto, palavras_adicionais=None, mascara='*'):
                     # Substituir a informação por asteriscos
                     mascara_texto = mascara * len(info)
                     texto = texto.replace(info, mascara_texto)
+        # Tratamento especial para endereços e outros padrões longos
+        elif tipo in ['ENDERECO', 'ENDERECO_RUA', 'PROFISSAO', 'FILIACAO']:
+            for match in re.finditer(padrao, texto, re.IGNORECASE):
+                info = match.group()
+                start = match.start()
+                end = match.end()
+                
+                # Armazenar o achado
+                achados.append({
+                    'Tipo de Entidade': tipo,
+                    'Texto': info,
+                    'Início': start,
+                    'Fim': end,
+                    'Confiança': 0.9
+                })
+                
+                # Substituir a informação por asteriscos
+                mascara_texto = mascara * len(info)
+                texto = texto.replace(info, mascara_texto)
         else:
-            for match in re.finditer(padrao, texto):
+            for match in re.finditer(padrao, texto, re.IGNORECASE):
                 info = match.group()
                 start = match.start()
                 end = match.end()
@@ -253,13 +612,21 @@ def process_file(uploaded_file, tolerancia, palavras, mascara):
     return process_text(texto, tolerancia, palavras, mascara)
 
 def process_text(texto, tolerancia, palavras, mascara):
-    """Processa um texto para anonimização"""
+    """Processa um texto para anonimização, usando uma abordagem híbrida (Presidio + Regex)"""
     try:
+        # Verifica o modo de anonimização selecionado
+        modo = st.session_state.get("modo_anonimizacao", "Automático (recomendado)")
+        
         # Prepara a lista de palavras a serem negadas
         deny_list = [p.strip() for p in palavras.split(",")] if palavras else []
         
-        # Usa a função de anonimização simples
-        texto_anonimizado, achados = anonimizar_simples(texto, deny_list, mascara)
+        # Escolhe a função de anonimização com base no modo selecionado
+        if modo == "Presidio":
+            texto_anonimizado, achados = anonimizar_com_presidio(texto, deny_list, mascara)
+        elif modo == "Regex":
+            texto_anonimizado, achados = anonimizar_simples(texto, deny_list, mascara)
+        else:  # Automático
+            texto_anonimizado, achados = anonimizar_hibrido(texto, palavras, mascara, tolerancia)
         
         # Se não encontrou nada para anonimizar
         if not achados:
@@ -288,7 +655,8 @@ def main():
     st.title("Anonimizador de Textos - LGPD")
     st.markdown("""
     ### Proteja dados sensíveis de acordo com a Lei Geral de Proteção de Dados
-    Esta ferramenta ajuda a identificar e mascarar informações pessoais identificáveis (PII) em textos.
+    Esta ferramenta ajuda a identificar e mascarar informações pessoais identificáveis (PII) em textos, 
+    utilizando a biblioteca Microsoft Presidio e técnicas avançadas de reconhecimento de padrões para o português brasileiro.
     """)
     
     # Opções de configuração
@@ -299,7 +667,7 @@ def main():
                 "Tolerância de detecção", 
                 min_value=0.1, 
                 max_value=1.0, 
-                value=0.25,
+                value=0.4,
                 help="Valores menores detectam mais padrões, mas podem gerar falsos positivos"
             )
         with col2:
@@ -315,6 +683,15 @@ def main():
                 max_chars=1,
                 help="Caractere usado para substituir informações pessoais"
             )
+            
+        # Modo de anonimização
+        st.radio(
+            "Modo de anonimização",
+            ["Automático (recomendado)", "Presidio", "Regex"],
+            index=0,
+            key="modo_anonimizacao",
+            help="Escolha o método de detecção de informações pessoais. O modo Automático combina ambas as técnicas."
+        )
     
     # Criação de abas para os diferentes métodos de input
     tab1, tab2 = st.tabs(["Texto", "Arquivo (PDF/CSV)"])
@@ -341,7 +718,20 @@ def main():
                         if "findings" in resultado and resultado["findings"]:
                             with st.expander("Informações detectadas", expanded=True):
                                 findings_df = pd.DataFrame(resultado["findings"])
+                                # Ordenar por confiança (decrescente)
+                                findings_df = findings_df.sort_values(by='Confiança', ascending=False)
                                 st.dataframe(findings_df)
+                                
+                                # Métricas de resumo
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("Total de itens identificados", len(findings_df))
+                                with col2:
+                                    num_tipos = findings_df['Tipo de Entidade'].nunique()
+                                    st.metric("Tipos de dados diferentes", num_tipos)
+                                with col3:
+                                    confianca_media = findings_df['Confiança'].mean()
+                                    st.metric("Confiança média", f"{confianca_media:.2f}")
                         
                         # Display the anonymized text
                         st.subheader("Resultado:")
@@ -360,6 +750,16 @@ def main():
                             file_name="texto_anonimizado.txt",
                             mime="text/plain"
                         )
+                        
+                        # Opção para relatório
+                        if "findings" in resultado and resultado["findings"]:
+                            report = generate_anonymization_report(user_input, resultado)
+                            st.download_button(
+                                label="Baixar relatório detalhado",
+                                data=report,
+                                file_name="relatorio_anonimizacao.txt",
+                                mime="text/plain"
+                            )
             else:
                 st.warning("Por favor, insira um texto para anonimizar.")
     
@@ -384,7 +784,20 @@ def main():
                         if "findings" in resultado and resultado["findings"]:
                             with st.expander("Informações detectadas", expanded=True):
                                 findings_df = pd.DataFrame(resultado["findings"])
+                                # Ordenar por confiança (decrescente)
+                                findings_df = findings_df.sort_values(by='Confiança', ascending=False)
                                 st.dataframe(findings_df)
+                                
+                                # Métricas de resumo
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("Total de itens identificados", len(findings_df))
+                                with col2:
+                                    num_tipos = findings_df['Tipo de Entidade'].nunique()
+                                    st.metric("Tipos de dados diferentes", num_tipos)
+                                with col3:
+                                    confianca_media = findings_df['Confiança'].mean()
+                                    st.metric("Confiança média", f"{confianca_media:.2f}")
                         
                         # Display the anonymized text
                         st.subheader("Resultado:")
@@ -398,6 +811,19 @@ def main():
                             file_name=f"{uploaded_file.name}_anonimizado.txt",
                             mime="text/plain"
                         )
+                        
+                        # Opção para relatório
+                        if "findings" in resultado and resultado["findings"]:
+                            report = generate_anonymization_report(
+                                f"Arquivo: {uploaded_file.name}", 
+                                resultado
+                            )
+                            st.download_button(
+                                label="Baixar relatório detalhado",
+                                data=report,
+                                file_name=f"{uploaded_file.name}_relatorio.txt",
+                                mime="text/plain"
+                            )
 
     # Informações adicionais
     with st.expander("Sobre este anonimizador"):
@@ -408,29 +834,120 @@ def main():
         - Fornecer uma forma simples de preservar a privacidade de dados pessoais
         - Permitir customização para atender a necessidades específicas
         - Facilitar a detecção automática e semi-automática de Informações Pessoais Identificáveis (PII)
+        - Atender às exigências da LGPD (Lei Geral de Proteção de Dados Pessoais)
+        
+        **Tecnologias utilizadas:**
+        - Microsoft Presidio: Framework de código aberto para anonimização de dados
+        - Reconhecimento de Entidades Nomeadas (NER)
+        - Expressões regulares otimizadas para o português brasileiro
+        - Abordagem híbrida para maximizar a detecção de dados pessoais
         
         **Limitações:**
         > ⚠️ **Atenção:** O anonimizador pode ajudar a identificar dados sensíveis em textos, mas por ser um 
         > mecanismo de detecção automática, não há garantias de que todas as informações sensíveis serão encontradas.
         > Sistemas adicionais de proteção devem ser empregados.
+        > Sempre revise o texto anonimizado manualmente antes de usá-lo em produção.
         
         **Tipos de dados detectados:**
         - CPF/CNPJ
         - RG
+        - Endereço completo e partes (rua, bairro, cidade)
+        - Estado civil
+        - Profissão
+        - Filiação
+        - Data de nascimento
+        - Idade
         - Nomes comuns brasileiros
-        - Nomes de empresas e organizações (sequências de palavras em maiúsculas)
-        - Endereços e CEPs
+        - Nomes de empresas e organizações
+        - CEPs
         - Números de telefone
         - E-mails
         - Dados de cartão de crédito
         - Datas
         - Termos sensíveis (raça, religião, orientação sexual, saúde, dados biométricos, etc.)
         - Palavras personalizadas definidas pelo usuário
+        
+        **Conformidade com a LGPD:**
+        Esta ferramenta ajuda a implementar medidas técnicas para proteção de dados pessoais,
+        conforme requerido pelos artigos 46-49 da LGPD (Lei 13.709/2018), contribuindo para
+        a minimização de riscos e o tratamento adequado de dados sensíveis.
         """)
     
     # Rodapé
     st.markdown("---")
-    st.markdown("© 2025 Anonimizador de Textos - LGPD | Desenvolvido com Streamlit")
+    st.markdown("© 2025 Anonimizador de Textos - LGPD | Desenvolvido com Streamlit e Microsoft Presidio")
+
+def generate_anonymization_report(original_text, resultado):
+    """Gera um relatório detalhado da anonimização"""
+    findings = resultado.get("findings", [])
+    texto_anonimizado = resultado.get("texto", "")
+    
+    report = "RELATÓRIO DE ANONIMIZAÇÃO DE DADOS\n"
+    report += "=" * 50 + "\n\n"
+    
+    # Data e hora
+    from datetime import datetime
+    report += f"Data/Hora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n\n"
+    
+    # Resumo
+    report += "RESUMO:\n"
+    report += "-" * 50 + "\n"
+    report += f"Total de informações sensíveis encontradas: {len(findings)}\n"
+    
+    if findings:
+        # Contar tipos de entidades
+        tipos_entidade = {}
+        for finding in findings:
+            tipo = finding.get('Tipo de Entidade', 'Desconhecido')
+            tipos_entidade[tipo] = tipos_entidade.get(tipo, 0) + 1
+        
+        report += "Distribuição por tipo:\n"
+        for tipo, contagem in tipos_entidade.items():
+            report += f"  - {tipo}: {contagem}\n"
+        
+        # Confiança média
+        confianca_total = sum(finding.get('Confiança', 0) for finding in findings)
+        confianca_media = confianca_total / len(findings)
+        report += f"Confiança média: {confianca_media:.2f}\n\n"
+        
+        # Detalhes das informações encontradas
+        report += "DETALHES DAS INFORMAÇÕES ENCONTRADAS:\n"
+        report += "-" * 50 + "\n"
+        
+        for i, finding in enumerate(findings, 1):
+            report += f"Item {i}:\n"
+            report += f"  Tipo: {finding.get('Tipo de Entidade', 'Desconhecido')}\n"
+            report += f"  Texto: {finding.get('Texto', '')}\n"
+            report += f"  Confiança: {finding.get('Confiança', 0):.2f}\n"
+            report += f"  Posição: {finding.get('Início', 0)}-{finding.get('Fim', 0)}\n"
+            report += "\n"
+    
+    # Amostras de texto (original e anonimizado)
+    # Limitando para evitar relatórios muito grandes
+    max_sample_length = 1000
+    sample_original = original_text[:max_sample_length] + ("..." if len(original_text) > max_sample_length else "")
+    sample_anon = texto_anonimizado[:max_sample_length] + ("..." if len(texto_anonimizado) > max_sample_length else "")
+    
+    report += "AMOSTRA DE TEXTO ORIGINAL:\n"
+    report += "-" * 50 + "\n"
+    report += sample_original + "\n\n"
+    
+    report += "AMOSTRA DE TEXTO ANONIMIZADO:\n"
+    report += "-" * 50 + "\n"
+    report += sample_anon + "\n\n"
+    
+    # Recomendações
+    report += "RECOMENDAÇÕES:\n"
+    report += "-" * 50 + "\n"
+    report += "1. Verifique manualmente o texto anonimizado para garantir que todas as informações sensíveis foram detectadas.\n"
+    report += "2. Considere ajustar a tolerância de detecção se informações importantes não foram identificadas.\n"
+    report += "3. Para casos específicos, adicione palavras personalizadas à lista de detecção.\n"
+    report += "4. Lembre-se que esta é uma ferramenta de auxílio e não substitui uma revisão manual cuidadosa.\n\n"
+    
+    report += "=" * 50 + "\n"
+    report += "Este relatório foi gerado automaticamente pelo Anonimizador de Textos - LGPD.\n"
+    
+    return report
 
 if __name__ == "__main__":
     main()
